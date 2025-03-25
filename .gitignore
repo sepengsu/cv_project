@@ -1,0 +1,46 @@
+# Python 가상환경 폴더
+venv/
+ENV/
+env/
+.venv/
+
+# Python 캐시 파일
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 실행 중 생기는 파일
+*.log
+*.sqlite3
+*.db
+
+# IDE 설정 파일
+.vscode/
+.idea/
+
+# 시스템 파일
+.DS_Store
+Thumbs.db
+
+# 기타 생성 파일
+*.pid
+*.bak
+*.swp
+*.tmp
+
+# Jupyter Notebook 체크포인트
+.ipynb_checkpoints/
+
+# FastAPI / Flask 실행 중 생성되는 파일들 (예: Uvicorn PID, temp 폴더 등)
+*.pid
+*.sock
+*.coverage
+
+# 테스트 결과
+htmlcov/
+coverage.xml
+
+# PyInstaller
+dist/
+build/
+*.spec
