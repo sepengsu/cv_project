@@ -44,3 +44,6 @@ coverage.xml
 dist/
 build/
 *.spec
+
+# data
+.data/
