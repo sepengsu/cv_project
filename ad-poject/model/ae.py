@@ -21,10 +21,11 @@ class Autoencoder(nn.Module):
         )
 
     def forward(self, x):
-        encoded = self.encoder(x) 
-        decoded = self.decoder(encoded) 
-        return encoded, decoded
-    
+        x = x.view(x.size(0), -1)  # flatten
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        decoded = decoded.view(-1, 1, 28, 28)  # reshape back
+        return decoded 
 
 class Autoencoder2D(nn.Module):
     def __init__(self):

@@ -47,3 +47,6 @@ build/
 
 # data
 .data/
+
+# checkpoints
+*.pth 
