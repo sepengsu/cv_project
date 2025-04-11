@@ -1,0 +1,3 @@
+model,loss,best_val_loss,best_epoch,gpu_peak_usage(MB),save_path
+SlimDeepCAE_Bottleneck32_Dropout,MSE,0.017026019282639027,63,72.63720703125,./results/temp_1/checkpoints/SlimDeepCAE_Bottleneck32_Dropout_MSEfp16.pth
+SlimDeepCAE_Combo,MSE,0.014791034162044525,83,52.1484375,./results/temp_1/checkpoints/SlimDeepCAE_Combo_MSEfp16.pth

@@ -2,6 +2,9 @@ import torch, os, time, threading
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
+
+
+
 class LoggerMixin:
     def __init__(self, log_dir="./runs"):
         self.writer = SummaryWriter(log_dir=log_dir)
@@ -16,15 +19,42 @@ class LoggerMixin:
         self.writer.add_scalar("GPU/Memory Allocated (MB)", allocated, epoch)
         self.writer.add_scalar("GPU/Memory Reserved (MB)", reserved, epoch)
 
-    def log_images(self, inputs, outputs, epoch, tag="Recon"):
-        # inputs, outputs: (B, C, H, W)
-        grid_input = torchvision.utils.make_grid(inputs[:8].cpu(), normalize=True)
-        grid_output = torchvision.utils.make_grid(outputs[:8].cpu(), normalize=True)
+    def log_images(self, inputs, labels, outputs, epoch, tag="Images"):
+        """
+        inputs, outputs: [B, C, H, W]
+        labels: [B]
+        """
+        colored_inputs = []
+        colored_outputs = []
+
+        for x, y, label in zip(inputs, outputs, labels):
+            colored_inputs.append(self.tint_image(x.cpu(), label.item()))
+            colored_outputs.append(self.tint_image(y.cpu(), label.item()))
+
+        grid_input = torchvision.utils.make_grid(colored_inputs, nrow=4, normalize=True)
+        grid_output = torchvision.utils.make_grid(colored_outputs, nrow=4, normalize=True)
+
         self.writer.add_image(f"{tag}/Input", grid_input, epoch)
         self.writer.add_image(f"{tag}/Output", grid_output, epoch)
 
+
     def close_logger(self):
         self.writer.close()
+
+    @staticmethod
+    def tint_image(img_tensor, label):
+        """
+        img_tensor: [1, H, W] 흑백 이미지
+        label: 0 or 1
+        반환: [3, H, W] 컬러 이미지
+        """
+        img = img_tensor.expand(3, -1, -1).clone()  # [1, H, W] → [3, H, W]
+        if label == 0:
+            img[0] = 0  # R = 0 → 파란색
+        else:
+            img[1] = 0  # G = 0
+            img[2] = 0  # B = 0 → 빨간색
+        return img
 
 
 class GPUUsageLoggerMixin:

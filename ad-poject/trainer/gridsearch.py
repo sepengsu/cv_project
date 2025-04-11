@@ -2,8 +2,10 @@ import copy, os, gc
 from tqdm import trange
 import torch
 import torch.nn as nn
-from .trainer import OneEpochTrainer, OneEpochTrainerFP16
+from .trainer import OneEpochTrainerFP16
 from .logger import LoggerMixin, GPUUsageLoggerMixin
+from eval_module.eval_show import EvalDataset
+
 
 class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixin):
     def __init__(self, models, criterions_dict, train_loader, val_loader,
@@ -23,6 +25,7 @@ class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixi
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.show_dataset = EvalDataset()
         os.makedirs(save_dir, exist_ok=True)
 
     def loss_candidates(self, model_class):
@@ -52,8 +55,9 @@ class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixi
 
                 model = model_class()
                 LoggerMixin.__init__(self, log_dir=os.path.join(self.log_dir, model_name, loss_name))
-                GPUUsageLoggerMixin.__init__(self)  # monitor 준비
-                
+                GPUUsageLoggerMixin.__init__(self)
+
+                # Loss 설정 방식에 따른 분기 처리
                 if hasattr(model, 'T'):
                     model.loss_fn = criterion
                     criterion_in_trainer = None
@@ -65,21 +69,31 @@ class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixi
                 model = model.to(self.device)
 
                 optimizer = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=1e-4)
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.n_epochs, eta_min=self.lr * 0.01)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=self.n_epochs, eta_min=self.lr * 0.01
+                )
+
+                # GANomaly용 optimizer_D 생성
+                optimizer_D = torch.optim.AdamW(model.discriminator.parameters(), lr=self.lr) \
+                    if hasattr(model, 'discriminator') else None
 
                 best_val_loss, best_epoch, early_stop_counter = float('inf'), 0, 0
                 best_model = None
 
-                self.start_gpu_monitor()  # ✅ 실시간 GPU 모니터링 시작
+                self.start_gpu_monitor()
 
                 for epoch in trange(self.n_epochs, desc=f"{model_name} | {loss_name} (FP16)"):
-                    train_loss = self.train_one_epoch(model, optimizer, criterion_in_trainer)
+                    train_loss = self.train_one_epoch(
+                        model, optimizer, criterion_in_trainer,
+                        is_train=True, optimizer_D=optimizer_D
+                    )
                     val_loss = self.validate_one_epoch(model, criterion_in_trainer)
                     scheduler.step()
 
                     if epoch % 10 == 0:
                         with torch.no_grad():
-                            sample_x = next(iter(self.val_loader))[0].to(self.device)
+                            sample_x, label = next(iter(torch.utils.data.DataLoader(self.show_dataset, batch_size=6)))
+                            sample_x = sample_x.to(self.device)
                             if hasattr(model, 'T'):
                                 t = torch.randint(0, model.T, (sample_x.size(0),), device=sample_x.device)
                                 output = model(sample_x, t)
@@ -87,7 +101,7 @@ class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixi
                                 output = model(sample_x)
                             if isinstance(output, tuple):
                                 output = output[0]
-                            self.log_images(sample_x, output, epoch)
+                            self.log_images(sample_x, label, output, epoch)
 
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
@@ -104,14 +118,16 @@ class GridSearchTrainerFP16(OneEpochTrainerFP16, LoggerMixin, GPUUsageLoggerMixi
                             print(f'>> Early Stopping at Epoch {epoch + 1}')
                         break
 
-                self.stop_gpu_monitor()  # ✅ 실시간 GPU 모니터링 종료
+                self.stop_gpu_monitor()
 
+                # 저장
                 for k in best_model:
                     best_model[k] = best_model[k].cpu()
-
                 save_name = '' if loss_name == '-' else f'_{loss_name.replace("+", "and")}fp16'
                 save_path = f'{self.save_dir}/{model_name}{save_name}.pth'
                 torch.save(best_model, save_path)
+                if self.verbose:
+                    print(f'>> Model [{model_name}] + Loss [{loss_name}] Saved to {save_path}')
 
                 print(f'>> Saved Best [{model_name}] + [{loss_name}] -> {save_path}')
                 print(f'>> Best Val Loss: {best_val_loss:.4f} at Epoch {best_epoch}')
