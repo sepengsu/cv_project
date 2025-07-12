@@ -56,3 +56,9 @@ build/
 logs/
 
 !logger.py
+
+# plots라는 폴더 
+plots/
+
+# 이미지 파일들
+*.png

@@ -27,5 +27,13 @@ class EvalDataset(Dataset):
         img = torch.tensor(img).unsqueeze(0)  # → [1, H, W]
         label = self.labels[idx]
         return img, label
+    
+if __name__ == "__main__":
+    dataset = EvalDataset(data_dir=r"C:\Users\na062\Desktop\cv_project\ad-poject\eval_module\test_images")
+    print(f"Total images: {len(dataset)}")
+    for img, label in dataset:
+        print(f"Image shape: {img.shape}, Label: {label}")
+        break  # 첫 번째 이미지 정보만 출력
+
 
 

@@ -2,16 +2,15 @@ import torch, os, time, threading
 from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
-
-
-
 class LoggerMixin:
     def __init__(self, log_dir="./runs"):
         self.writer = SummaryWriter(log_dir=log_dir)
 
     def log_losses(self, train_loss, val_loss, epoch):
         self.writer.add_scalar("Loss/Train", train_loss, epoch)
-        self.writer.add_scalar("Loss/Validation", val_loss, epoch)
+        if val_loss is not None:
+            self.writer.add_scalar("Loss/Validation", val_loss, epoch)
+
 
     def log_gpu_usage(self, epoch):
         allocated = torch.cuda.memory_allocated() / 1024**2
@@ -31,8 +30,8 @@ class LoggerMixin:
             colored_inputs.append(self.tint_image(x.cpu(), label.item()))
             colored_outputs.append(self.tint_image(y.cpu(), label.item()))
 
-        grid_input = torchvision.utils.make_grid(colored_inputs, nrow=4, normalize=True)
-        grid_output = torchvision.utils.make_grid(colored_outputs, nrow=4, normalize=True)
+        grid_input = torchvision.utils.make_grid(colored_inputs, nrow=4, normalize=False)
+        grid_output = torchvision.utils.make_grid(colored_outputs, nrow=4, normalize=False)
 
         self.writer.add_image(f"{tag}/Input", grid_input, epoch)
         self.writer.add_image(f"{tag}/Output", grid_output, epoch)

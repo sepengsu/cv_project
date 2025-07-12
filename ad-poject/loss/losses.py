@@ -1,111 +1,101 @@
-from .loss_funtion import gradient_loss, tv_loss
-from .loss_funtion import ssim_loss, ms_ssim_loss, charbonnier_loss
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# ------------------------
-# Flexible Loss (조합형)
-# ------------------------
+from .loss_function import ssim_loss, ms_ssim_loss, gradient_loss, tv_loss, laplacian_edge_loss
+from .center import center_crop_loss, center_weighted_loss, create_center_weight_map
+from .fft import fft_loss
+
 class FlexibleLoss(nn.Module):
-    def __init__(self, mode='mse', alpha=0.5, beta=1.0, gamma=0.1, delta=0.1, reduction='mean'):
-        super(FlexibleLoss, self).__init__()
-        """
-        mode: 손실 조합 지정 (예: 'mse+gradient')
-        reduction: 'mean' | 'sum' | 'none'
-        """
-        self.mode = mode.split('+')
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        self.delta = delta
+    def __init__(self, mode='mse', loss_weights=None, reduction='mean', epoch_threshold=10, crop_size=16, sigma=5):
+        super().__init__()
+        self.modes = mode.lower().split('+')
         self.reduction = reduction
+        self.base_weights = loss_weights if loss_weights else {m: 1.0 for m in self.modes}
+        self.epoch_threshold = epoch_threshold
+        self.crop_size = crop_size
+        self.sigma = sigma
+        self.map = create_center_weight_map(28, sigma).to('cuda' if torch.cuda.is_available() else 'cpu')
 
-    def forward(self, x, y):
-        loss = 0.0
-        for m in self.mode:
-            if m == 'mse':
-                component = F.mse_loss(x, y, reduction=self.reduction)
-                loss += self.beta * component
+    def reduce(self, x):
+        if x is None:
+            return None
+        if not torch.isfinite(x).all():
+            return None
+        if self.reduction == 'none':
+            # 🔥 여기서 (B,) 형태로 정리
+            return x.view(x.size(0), -1).mean(dim=1) if x.dim() > 1 else x.view(-1)
+        elif self.reduction == 'mean':
+            return x.mean()
+        elif self.reduction == 'sum':
+            return x.sum()
 
-            elif m == 'l1':
-                component = F.l1_loss(x, y, reduction=self.reduction)
-                loss += self.beta * component
+    def forward(self, x, y,epoch=100):
+        valid_losses = {}
+        active_weights = {}
 
-            elif m == 'charbonnier':
-                diff = torch.sqrt((x - y) ** 2 + 1e-6)
-                if self.reduction == 'none':
-                    component = diff
-                elif self.reduction == 'sum':
-                    component = diff.sum()
+        if epoch< self.epoch_threshold:
+            raw = F.mse_loss(x, y, reduction='none')
+            loss = self.reduce(raw)
+            return loss
+
+        for m in self.modes:
+            w = self.base_weights.get(m, 1.0)
+            if w == 0:
+                continue
+            try:
+                if m == 'mse':
+                    raw = F.mse_loss(x, y, reduction='none')
+                    loss = self.reduce(raw)
+                elif m == 'charbonnier':
+                    raw = torch.sqrt((x - y) ** 2 + 1e-6)
+                    loss = self.reduce(raw)
+                elif m == 'ssim':
+                    raw = ssim_loss(x, y)
+                    loss = self.reduce(raw)
+                elif m == 'ms-ssim':
+                    raw = ms_ssim_loss(x, y)
+                    loss = self.reduce(raw)
+                elif m == 'gradient':
+                    raw = gradient_loss(x, y)
+                    loss = self.reduce(raw)
+                elif m == 'tv':
+                    raw = tv_loss(x)
+                    loss = self.reduce(raw)
+                elif m == 'edge':
+                    raw = laplacian_edge_loss(x, y)
+                    loss = self.reduce(raw)
+                elif m == 'center_crop':
+                    raw = center_crop_loss(x, y, size=self.crop_size)
+                    loss = self.reduce(raw)
+                elif m == 'center_weighted':
+                    raw = center_weighted_loss(x, y,weight_map=self.map)
+                    loss = self.reduce(raw)
+                elif m == 'fft':
+                    raw = fft_loss(x, y)
+                    loss = self.reduce(raw)
+                elif m == 'noise':
+                    continue
                 else:
-                    component = diff.mean()
-                loss += self.beta * component
+                    raise ValueError(f"[FlexibleLoss] Unknown loss type: {m}")
 
-            elif m == 'ssim':
-                component = ssim_loss(x, y)
-                if self.reduction == 'none':
-                    component = torch.full((x.size(0),), component, device=x.device)
-                loss += self.alpha * component
+                if loss is not None and torch.isfinite(loss).all():
+                    valid_losses[m] = loss
+                    active_weights[m] = w
 
-            elif m == 'ms-ssim':
-                component = ms_ssim_loss(x, y)
-                if self.reduction == 'none':
-                    component = torch.full((x.size(0),), component, device=x.device)
-                loss += self.alpha * component
+            except Exception as e:
+                print(f"[❌ Error] {m} loss computation failed: {e}")
 
-            elif m == 'gradient':
-                component = gradient_loss(x, y)
-                if self.reduction == 'none':
-                    component = torch.full((x.size(0),), component, device=x.device)
-                loss += self.gamma * component
+        total_weight = sum(active_weights.values())
 
-            elif m == 'tv':
-                component = tv_loss(x)
-                if self.reduction == 'none':
-                    component = torch.full((x.size(0),), component, device=x.device)
-                loss += self.delta * component
+        if total_weight == 0:
+            print("[‼️ Fallback] All loss terms invalid or zero-weighted → dummy loss used")
+            dummy = F.mse_loss(x, y, reduction='none').view(x.size(0), -1).mean(dim=1)
+            return dummy * 0.0 + 1.0 if self.reduction == 'none' else dummy.mean() * 0.0 + 1.0
 
-            else:
-                raise NotImplementedError(f"Unknown loss mode: {m}")
-        return loss
-# ------------------------
-# Loss Function for Diffusion Models
-class FlexibleDiffusionLoss(nn.Module):
-    def __init__(self, mode='mse', alpha=0.5, beta=1.0, gamma=0.1, delta=0.1, epsilon=1e-3):
-        super(FlexibleDiffusionLoss, self).__init__()
-        """
-        mode options:
-            mse, l1, charbonnier, gradient, tv
-            또는 조합:
-            mse+l1, mse+charbonnier, charbonnier+gradient+tv 등
-        """
-        self.mode = mode.split('+')
-        self.alpha = alpha  # for gradient loss
-        self.beta = beta    # for mse, l1, charbonnier
-        self.gamma = gamma  # for tv
-        self.delta = delta  # reserved (if needed)
-        self.epsilon = epsilon  # for charbonnier
+        total_loss = None
+        for m, loss_val in valid_losses.items():
+            scaled_w = active_weights[m] / total_weight
+            weighted_loss = scaled_w * loss_val
+            total_loss = weighted_loss if total_loss is None else total_loss + weighted_loss
 
-    def forward(self, noise_pred, noise_true):
-        loss = 0.0
-        for m in self.mode:
-            if m == 'mse':
-                loss += self.beta * F.mse_loss(noise_pred, noise_true)
-            elif m == 'l1':
-                loss += self.beta * F.l1_loss(noise_pred, noise_true)
-            elif m == 'charbonnier':
-                loss += self.beta * torch.mean(torch.sqrt((noise_pred - noise_true) ** 2 + self.epsilon ** 2))
-            elif m == 'gradient':
-                loss += self.alpha * gradient_loss(noise_pred, noise_true)
-            elif m == 'tv':
-                loss += self.gamma * tv_loss(noise_pred)
-            else:
-                raise NotImplementedError(f"Unknown loss type: {m}")
-        return loss
-# ------------------------
-# Threshold 자동 계산 함수
-# ------------------------
-def auto_threshold(errors, ratio=0.95):
-    sorted_err = torch.sort(errors)[0]
-    idx = int(len(sorted_err) * ratio)
-    return sorted_err[idx].item()
+        return total_loss
